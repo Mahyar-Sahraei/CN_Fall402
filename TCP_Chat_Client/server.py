@@ -5,6 +5,11 @@ import socket
 import re
 import logging
 
+import numpy
+
+from config import *
+
+
 class Client:
     def __init__(self, identifier: int, addr: tuple[str, int], socket: socket):
         self.id = identifier
@@ -20,8 +25,8 @@ class Client:
     def has_incoming_messages(self):
         return not self.message_queue.empty()
 
-    def enqueue_message(self, message, sender_id):
-        self.message_queue.put((message, sender_id))
+    def enqueue_message(self, message, sender_id, is_global=False):
+        self.message_queue.put((message, sender_id, is_global))
 
     def dequeue_message(self):
         return self.message_queue.get()
@@ -32,29 +37,17 @@ class Client:
 
 
 class Server:
-    def __init__(self, ip, port, uip, uport, max_client=100, max_queueing=5):
+    def __init__(self, tcp_addr, udp_addr, max_client=100, max_queueing=5):
         self.max_client = max_client
         self.client_list = {}
-        self.inc_client_id = 0
+        self.client_ids = numpy.random.choice(range(1000, 10000), 100, replace=False)
+        self.client_idx = 0
 
         self.socket = socket.socket(family=socket.AF_INET, type=socket.SOCK_STREAM)
-        self.socket.bind((ip, port))
+        self.socket.bind(tcp_addr)
 
         self.udp_socket = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
-        self.udp_socket.bind((uip, uport))
-
-    def is_socket_alive(self, client_socket):
-        try:
-            data = client_socket.recv(16, socket.MSG_DONTWAIT | socket.MSG_PEEK)
-            if len(data) == 0:
-                return False
-        except BlockingIOError:
-            return True
-        except ConnectionResetError:
-            return False
-        except Exception as e:
-            return False
-        return True
+        self.udp_socket.bind(udp_addr)
 
     def start(self):
         udp_thread = Thread(target=self.handle_udp)
@@ -69,9 +62,10 @@ class Server:
                 client_socket, addr = self.socket.accept()
 
                 if len(self.client_list) <= self.max_client:
-                    client = Client(self.inc_client_id, addr, client_socket)
-                    self.client_list[self.inc_client_id] = client
-                    self.inc_client_id += 1
+                    given_id = self.client_id[self.client_idx]
+                    client = Client(given_id, addr, client_socket)
+                    self.client_list[given_id] = client
+                    self.client_idx = (self.client_idx + 1) % len(self.client_ids)
                     logging.log(logging.INFO, f"Client: {client.id} entered the server.")
 
                     req_thread = Thread(target=self.handle_req, args=[client])
@@ -106,7 +100,10 @@ class Server:
             try:
                 message = client.socket.recv(2048).decode()
 
-                if message == "close":
+                if message == "alive":
+                    continue
+
+                elif message == "close":
                     self.client_list.pop(client.id)
                     client.shutdown()
                     logging.log(logging.INFO, f"Client: {client.id} left the server.")
@@ -116,11 +113,14 @@ class Server:
                     client.set_name(matches.groups()[0])
                     logging.log(logging.INFO, f"Client: {client.id} changed his/her name to: {client.name}.")
 
-                elif (matches := re.match(r"sendto:(\d+)\smsg:(.+)", message)) is not None:
-                        id = int(matches.groups()[0])
-                        client_message = matches.groups()[1]
+                elif (matches := re.match(r"sendto:(\d+)\smsg:(.+)", message, flags=re.S)) is not None:
+                        receiver_id, client_message = matches.groups()
 
-                        target_client = self.client_list[id]
+                        if receiver_id == GLOBAL_CHAT_ID:
+                            self.send_all(client, client_message)
+                            continue
+
+                        target_client = self.client_list[int(receiver_id)]
 
                         if target_client is not None:
                             target_client.enqueue_message(client_message, client.id)
@@ -130,24 +130,31 @@ class Server:
                         else:
                             client.socket.send("log:Specified user doesn't exist.".encode())
             except TimeoutError:
-                if self.is_socket_alive(client.socket):
-                    continue
-                else:
-                    self.client_list.pop(client.id)
-                    client.shutdown()
-                    logging.log(logging.INFO, f"Client: {client.id} disconnected.")
-                    break
+                self.client_list.pop(client.id)
+                client.shutdown()
+                logging.log(logging.INFO, f"Client: {client.id} disconnected.")
+                break
 
     def handle_res(self, client: Client):
+        client.socket.send(f"setid:{client.id}".encode())
         while client.active:
             if client.has_incoming_messages():
-                message, sender_id = client.dequeue_message()
+                message, sender_id, is_global = client.dequeue_message()
                 sender_name = self.client_list[sender_id].name
-                client.socket.send(f"msgfrom:{sender_id} name:{sender_name} msg:{message}".encode())
+                globalflag = 1 if is_global else 0
+                client.socket.send(f"global:{globalflag} msgfrom:{sender_id} name:{sender_name} msg:{message}".encode())
                 logging.log(logging.INFO, f"Client: {client.id} received a message from {sender_id}")
             else:
                 sleep(2)
-            
+
+    def send_all(self, client, message):
+        for client_id in self.client_list:
+            if client_id != client.id:
+                target_client = self.client_list[client_id]
+                target_client.enqueue_message(message)
+        client.socket.send(f"log:Message sent to all successfully")
+        
+        
 
     def refuse(self, client_socket: socket):
         client_socket.send("Server is full! try again later.".encode())
@@ -157,5 +164,5 @@ class Server:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
-    server = Server("127.0.0.1", 1234, "127.0.0.1", 4321)
+    server = Server(SERVER_TCP_ADDR, SERVER_UDP_ADDR)
     server.start()

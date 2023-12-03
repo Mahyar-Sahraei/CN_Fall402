@@ -5,11 +5,15 @@ import socket
 import re
 import logging
 
+from config import *
+
+
 class Client:
-    def __init__(self, name, server_ip, server_port):
+    def __init__(self, name, server_tcp_addr):
         self.name = name
+        self.id = -1
         self.socket = socket.socket(family=socket.AF_INET, type=socket.SOCK_STREAM)
-        self.sever_addr = (server_ip, server_port)
+        self.sever_addr = server_tcp_addr
 
         self.command_queue = Queue()
 
@@ -44,8 +48,11 @@ class Client:
             return not self.log_queue.empty()
 
     def connect(self):
-        self.socket.connect(self.sever_addr)
-        self.socket.send(f"setname:{self.name}".encode())
+        try:
+            self.socket.connect(self.sever_addr)
+            self.socket.send(f"setname:{self.name}".encode())
+        except Exception as e:
+            return False
         self.connected = True
 
         req_thread = Thread(target=self.handle_req)
@@ -56,80 +63,124 @@ class Client:
         req_thread.start()
         res_thread.start()
 
-    def handle_req(self):
-        while self.connected == True:
-            if self.has_command():
-                command= self.dequeue_command()
-                self.socket.send(command.encode())
-            else:
-                sleep(2)
+        return True
 
+    def handle_req(self):
+        slept = 0
+        while self.connected == True:
+            try:
+                if self.has_command():
+                    command= self.dequeue_command()
+                    self.socket.send(command.encode())
+                    slept = 0
+                else:
+                    sleep(1)
+                    slept += 1
+                
+                if slept > 5:
+                    self.socket.send("alive".encode())
+                    slept = 0
+
+            except OSError:
+                self.close()
+                return
+            
     def handle_res(self):
         while self.connected == True:
             try:
                 message = self.socket.recv(2048).decode()
             except OSError:
-                self.connected = False
+                self.close()
                 return
 
-            if (matches := re.match(r"log:(\w+)", message)) is not None:
+            if (matches := re.match(r"log:(.+)", message)) is not None:
                 self.enqueue_message("log", "[SERVER]", matches.groups()[0])
 
-            elif (matches := re.match(r"msgfrom:(\d+)\sname:(\w+)\smsg:(.+)", message)) is not None:
-                sender_id, sender_name, received_message = matches.groups()
-                self.enqueue_message("message", f"{sender_name}#{sender_id}", received_message)
+            elif (matches := re.match(r"setid:(\d+)", message)) is not None:
+                self.id = int(matches.groups()[0])
+                
+            elif (matches := re.match(r"global:(\d)\smsgfrom:(\d+)\sname:(\w+)\smsg:(.+)", message, flags= re.S)) is not None:
+                globalflag, sender_id, sender_name, received_message = matches.groups()
+                if globalflag == "0":
+                    self.enqueue_message("message", f"{sender_name}#{sender_id}", received_message)
+                else:
+                    self.enqueue_message("message", f"[GLOBAL]{sender_name}#{sender_id}", received_message)
 
     def close(self):
         self.connected = False
         try:
             self.socket.send("close".encode())
             self.socket.close()
+
         except Exception:
             pass
 
 
 
 class UI:
-    def __init__(self, server_uip, server_uport):
+    def __init__(self, server_udp_addr):
         self.client = None
         self.username = None
         self.history = {}
         
         self.udp_socket = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
-        self.udp_server_addr = (server_uip, server_uport)
+        self.server_udp_addr = server_udp_addr
 
     def get_active_users(self):
-        self.udp_socket.sendto("getactiveusers".encode(), self.udp_server_addr)
+        self.udp_socket.sendto("getactiveusers".encode(), self.server_udp_addr)
         data, _ = self.udp_socket.recvfrom(2048)
         userlist = data.decode().split(";")
         userlist.pop()
-        return userlist
+
+        fmt_userlist = []
+        for i in range(len(userlist)):
+            user_id, user_name = re.match(r"ID:(\d+),NAME:(.+)", userlist[i]).groups()
+            fmt_userlist.append((user_id, user_name))
+
+        return fmt_userlist
 
     def send_message(self):
         print("Getting a list of active users...")
         userlist = self.get_active_users()
 
+        print("\nActive Users")
+        print("------------")
+
         if len(userlist) == 0:
             print("No active users!")
             return
 
-        for i in range(len(userlist)):
-            print(f"[{i}]:", userlist[i])
-        print("Type the number of the user that you want to send a message to (or type \'c\' to cancle):")
+        print("[G]: Send a message to everyone")
+        for user in userlist:
+            print(f"[{user[0]}]: {user[1]}")
+        print("\nType \'G\' to send a message to everyone in the server")
+        print("Or type the [ID] of the user that you want to send a message to")
+        print("And If you want to cancle, type \'C\':")
 
-        receiver = -1
+        receiver_id = None
         while True:
             choice = input(">> ")
-            if choice == "c":
+            if choice == "C":
                 return
+
+            elif choice == "G":
+                receiver_id = GLOBAL_CHAT_ID
+                break
+
             elif re.match(r"\d+", choice):
-                receiver = int(choice)
-                if receiver < 0 or receiver >= len(userlist):
-                    print("The number must be within the list!")
-                else:
+                receiver_id = int(choice)
+                valid_user = False
+                for user in userlist:
+                    if user[0] == receiver_id:
+                        valid_user = True
+                        break
+                if valid_user:
                     break
+                else:
+                    print("The ID must be within the list!")
+
             else:
-                print("Your input doesn't look like a number...")
+                print(f"{choice} doesn't look like a valid option...")
 
         print("What is your message? (press \'enter\' twice to send or press \'Ctrl+c\' to cancle):")
         
@@ -147,11 +198,10 @@ class UI:
             except KeyboardInterrupt:
                 return
 
-        receiver_id = re.match(r"ID:(\d+),NAME:.+", userlist[receiver]).groups()[0]
         self.client.enqueue_command(f"sendto:{receiver_id} msg:{message}")
 
     def receive_messages(self):
-        print("\n\nMessages\n------------")
+        print("\nMessages\n------------")
         messages = []
         while self.client.has_messages("message"):
             messages.append(self.client.dequeue_message("message"))
@@ -162,9 +212,12 @@ class UI:
                 if self.history.get(sender) is None:
                     self.history[sender] = []
                 self.history[sender].append(message)
-                print(f"{sender}: {message}")
+                print(f"{sender}:")
+                for line in message.split("\n"):
+                    print(f"\t{line}")
+                print()
 
-        print("\n\nServer messages\n------------")
+        print("\nServer messages\n------------")
         logs = []
         while self.client.has_messages("log"):
             logs.append(self.client.dequeue_message("log"))
@@ -179,7 +232,7 @@ class UI:
         pass
 
     def exit_ui(self):
-        print(f"Goodbye, {self.client.name}!")
+        print(f"Goodbye, {self.username}!")
         exit(0)
 
     def main_menu(self):
@@ -208,20 +261,28 @@ class UI:
 
             if option == 0:
                 print("Fetching...")
-                for user in self.get_active_users():
-                    print(user)
+                active_users = self.get_active_users()
+                print("Active Users:")
+                print("------------")
+                if len(active_users) < 1:
+                    print("No active users!")
+                else:
+                    for user in active_users:
+                        if user[0] != self.client.id:
+                            print(f"[{user[0]}]: {user[1]}")
 
             elif option == 1:
-                self.client = Client(self.username, "127.0.0.1", 1234)
-                self.start_chat()
+                self.client = Client(self.username, SERVER_TCP_ADDR)
+                if self.client.connect():
+                    print("You are connected to the server!")
+                    self.start_chat()
+                else:
+                    print("Couldn't connect to the server. Please try again")
 
             else:
                 self.exit_ui()
 
-
     def start_chat(self):
-        self.client.connect()
-        print("You are connected to the server!")
         while True:
             print("\n\nChatroom")
             print("------------")
@@ -272,5 +333,5 @@ class UI:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
-    ui = UI("127.0.0.1", 4321)
+    ui = UI(SERVER_UDP_ADDR)
     ui.main_menu()
