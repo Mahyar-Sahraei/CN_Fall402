@@ -20,7 +20,7 @@ class Client:
         self.message_queue = Queue()
         self.log_queue = Queue()
 
-    def enqueue_command(self, command: str):
+    def enqueue_command(self, command):
         self.command_queue.put(command)
 
     def dequeue_command(self):
@@ -29,19 +29,19 @@ class Client:
     def has_command(self):
         return not self.command_queue.empty()
 
-    def enqueue_message(self, mtype: str, sender: str, message: str):
+    def enqueue_message(self, mtype, is_global, sender_name, sender_id, message):
         if mtype == "message":
-            self.message_queue.put((sender, message))
+            self.message_queue.put((is_global, sender_name, sender_id, message))
         else:
-            self.log_queue.put((sender, message))
+            self.log_queue.put(message)
 
-    def dequeue_message(self, mtype: str):
+    def dequeue_message(self, mtype):
         if mtype == "message":
             return self.message_queue.get()
         else:
             return self.log_queue.get()
 
-    def has_messages(self, mtype: str):
+    def has_messages(self, mtype):
         if mtype == "message":
             return not self.message_queue.empty()
         else:
@@ -94,17 +94,14 @@ class Client:
                 return
 
             if (matches := re.match(r"log:(.+)", message)) is not None:
-                self.enqueue_message("log", "[SERVER]", matches.groups()[0])
+                self.enqueue_message("log", None, None, None, matches.groups()[0])
 
             elif (matches := re.match(r"setid:(\d+)", message)) is not None:
                 self.id = int(matches.groups()[0])
                 
             elif (matches := re.match(r"global:(\d)\smsgfrom:(\d+)\sname:(\w+)\smsg:(.+)", message, flags= re.S)) is not None:
                 globalflag, sender_id, sender_name, received_message = matches.groups()
-                if globalflag == "0":
-                    self.enqueue_message("message", f"{sender_name}#{sender_id}", received_message)
-                else:
-                    self.enqueue_message("message", f"[GLOBAL]{sender_name}#{sender_id}", received_message)
+                self.enqueue_message("message", globalflag, sender_name, sender_id, received_message)
 
     def close(self):
         self.connected = False
@@ -116,12 +113,14 @@ class Client:
             pass
 
 
-
 class UI:
     def __init__(self, server_udp_addr):
         self.client = None
         self.username = None
-        self.history = {}
+        self.history = {
+            "[GLOBAL]": {}
+        }
+        self.names = {}
         
         self.udp_socket = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
         self.server_udp_addr = server_udp_addr
@@ -168,13 +167,13 @@ class UI:
                 break
 
             elif re.match(r"\d+", choice):
-                receiver_id = int(choice)
                 valid_user = False
                 for user in userlist:
-                    if user[0] == receiver_id:
+                    if user[0] == choice:
                         valid_user = True
                         break
                 if valid_user:
+                    receiver_id = int(choice)
                     break
                 else:
                     print("The ID must be within the list!")
@@ -205,14 +204,26 @@ class UI:
         messages = []
         while self.client.has_messages("message"):
             messages.append(self.client.dequeue_message("message"))
+
         if len(messages) == 0:
             print ("No new messages.")
+
         else:
-            for sender, message in messages:
-                if self.history.get(sender) is None:
-                    self.history[sender] = []
-                self.history[sender].append(message)
-                print(f"{sender}:")
+            for is_global, sender_name, sender_id, message in messages:
+                if self.names.get(sender_id) is None:
+                    self.names[sender_id] = sender_name
+
+                if is_global == "1":
+                    if self.history["[GLOBAL]"].get(sender_id) is None:
+                        self.history["[GLOBAL]"][sender_id] = []
+                    self.history["[GLOBAL]"][sender_id].append(message)
+
+                else: 
+                    if self.history.get(sender_id) is None:
+                        self.history[sender_id] = []
+                    self.history[sender_id].append(message)
+
+                print(f"{sender_name}#{sender_id}{'[GLOBALL]:' if is_global == '1' else ':'}")
                 for line in message.split("\n"):
                     print(f"\t{line}")
                 print()
@@ -224,12 +235,76 @@ class UI:
         if len(logs) == 0:
             print("No messages from server.")
         else:
-            for sender, message in logs:
-                print(f"{sender}: {message}")
+            for message in logs:
+                print(f"[SERVER]: {message}")
 
     def show_history(self):
-        print("Coming soon :)")
-        pass
+        print("\nHistory")
+        print("------------")
+
+        if len(self.history) == 1 and len(self.history["[GLOBAL]"]) == 0:
+            print("No messages here!")
+            return
+
+        if len(self.history["[GLOBAL]"]) != 0:
+            print("@Global_Messages")
+        for sender_id in self.history:
+            if sender_id != "[GLOBAL]":
+                print(f"@{self.names[sender_id]}#{sender_id}")
+
+
+
+        print("\nChoose one of the users (by ID) to view their message history,")
+        print("Or view global chats by typing G,")
+        print("And type \'C\' if you want to cancle:")
+
+        sender_id = None
+        while True:
+            choice = input(">> ")
+
+            if choice == "C":
+                return
+
+            elif choice == "G":
+                if len(self.history["[GLOBAL]"]) != 0:
+                    sender_id = "[GLOBAL]"
+                    break
+                else:
+                    print("You have no public messages yet.")
+            
+            elif re.match("(\d+)", choice):
+                valid_sender = False
+                for sender in self.history:
+                    if sender == choice:
+                        valid_sender = True
+                        break
+
+                if valid_sender:
+                    sender_id = choice
+                    break
+
+                else:
+                    print("The ID must be within the list!")
+
+            else:
+                print(f"{choice} doesn't look like a valid option...")
+
+        if sender_id == "[GLOBAL]":
+            for client_id in self.history["[GLOBAL]"]:
+                print(f"\n\n{self.names[client_id]}#{client_id}")
+                print("------------")
+                for message in self.history["[GLOBAL]"][client_id]:
+                    for line in message.split("\n"):
+                        print(f"\t{line}")
+                    print("------")
+
+        else:
+            print(f"\n\n{self.names[sender_id]}#{sender_id}")
+            print("------------")
+            for message in self.history[sender_id]:
+                for line in message.split("\n"):
+                    print(f"\t{line}")
+                print("------")
 
     def exit_ui(self):
         print(f"Goodbye, {self.username}!")
@@ -268,14 +343,18 @@ class UI:
                     print("No active users!")
                 else:
                     for user in active_users:
-                        if user[0] != self.client.id:
-                            print(f"[{user[0]}]: {user[1]}")
+                        print(f"[{user[0]}]: {user[1]}")
 
             elif option == 1:
                 self.client = Client(self.username, SERVER_TCP_ADDR)
                 if self.client.connect():
                     print("You are connected to the server!")
-                    self.start_chat()
+                    try:
+                        self.start_chat()
+                    except Exception as e:
+                        self.client.close()
+                    except KeyboardInterrupt:
+                        self.client.close()
                 else:
                     print("Couldn't connect to the server. Please try again")
 
