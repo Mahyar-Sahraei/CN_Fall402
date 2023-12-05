@@ -126,8 +126,14 @@ class UI:
         self.server_udp_addr = server_udp_addr
 
     def get_active_users(self):
-        self.udp_socket.sendto("getactiveusers".encode(), self.server_udp_addr)
-        data, _ = self.udp_socket.recvfrom(2048)
+        try:
+            self.udp_socket.sendto("getactiveusers".encode(), self.server_udp_addr)
+            self.udp_socket.settimeout(5)
+            data, _ = self.udp_socket.recvfrom(2048)
+        except socket.error:
+            print("Server isn't responding right now. Please try again later.\n")
+            return []
+
         userlist = data.decode().split(";")
         userlist.pop()
 
@@ -350,7 +356,7 @@ class UI:
             if option == 0:
                 print("Fetching...")
                 active_users = self.get_active_users()
-                print("Active Users:")
+                print("\nActive Users:")
                 print("------------")
                 if len(active_users) < 1:
                     print("No active users!")
