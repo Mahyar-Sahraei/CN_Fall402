@@ -131,7 +131,7 @@ class Server:
 
                         else:
                             client.socket.send("log:Specified user doesn't exist.".encode())
-            except TimeoutError:
+            except socket.error:
                 self.client_list.pop(client.id)
                 client.shutdown()
                 logging.info(f"{client.get_name_id()} disconnected.")
