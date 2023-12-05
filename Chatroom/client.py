@@ -116,7 +116,7 @@ class Client:
 class UI:
     def __init__(self, server_udp_addr):
         self.client = None
-        self.username = None
+        self.username = "[UNKNOWN]"
         self.history = {
             "[GLOBAL]": {}
         }
@@ -306,21 +306,34 @@ class UI:
                     print(f"\t{line}")
                 print("------")
 
+    def change_username(self):
+        print("Please enter your name. The name should only contain alphabets, numbers, _, - or dot(.):")
+        while True:
+            name = input(">> ")
+            try:
+                if re.match(r"^([a-zA-Z0-9]|\-|\_|\.)+$", name):
+                    self.username = name
+                    print(f"Your name set to {self.username} successfully.")
+                    return
+                print("Invalid name! try again")
+            except KeyboardInterrupt:
+                return
+
     def exit_ui(self):
         print(f"Goodbye, {self.username}!")
         exit(0)
 
     def main_menu(self):
-        print("Welcome to the chatroom! please introduce yourself:")
-        self.username = input(">> ")
-        print(f"Great, {self.username}! you are now ready to chat with other people.")
+        print("Welcome to the chatroom!")
+        self.change_username()
         while True:
             print("\n\nMain Menu")
             print("------------")
             print("Please choose an option:")
             print("[0]. Get a list of server's active users")
             print("[1]. Connect to the chatroom")
-            print("[2]. Exit\n")
+            print("[2]. Change your name")
+            print("[3]. Exit\n")
 
             option = -1
             while True:
@@ -329,8 +342,8 @@ class UI:
                     print("Please enter a number")
                     continue
                 option = int(choice)
-                if option < 0 or option > 2:
-                    print("Please choose a number between 0 and 2")
+                if option < 0 or option > 3:
+                    print("Please choose a number between 0 and 3")
                 else:
                     break
 
@@ -357,6 +370,9 @@ class UI:
                         self.client.close()
                 else:
                     print("Couldn't connect to the server. Please try again")
+
+            elif option == 2:
+                self.change_username()
 
             else:
                 self.exit_ui()
