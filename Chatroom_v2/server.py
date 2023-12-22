@@ -7,8 +7,6 @@ import logging
 import hashlib
 import json
 
-import numpy
-
 from config import *
 
 
