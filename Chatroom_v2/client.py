@@ -11,9 +11,10 @@ from config import *
 
 
 class Client:
-    def __init__(self, name, password, server_tcp_addr):
+    def __init__(self, name, password, status, server_tcp_addr):
         self.name = name
         self.password = password
+        self.status = status
         self.socket = socket.socket(family=socket.AF_INET, type=socket.SOCK_STREAM)
         self.sever_addr = server_tcp_addr
 
@@ -57,6 +58,10 @@ class Client:
     
     def has_history(self):
         return not self.history_queue.empty()
+    
+    def set_status(self, status):
+        self.status = status
+        self.enqueue_command(f"setstatus:{self.status}")
 
     def connect(self):
         try:
@@ -67,7 +72,7 @@ class Client:
                 self.socket.send(self.password.encode())
             if self.socket.recv(1024).decode() == "reject":
                 return False
-        except Exception:
+        except socket.error:
             return False
         self.connected = True
 
@@ -125,7 +130,7 @@ class Client:
             self.socket.send("close".encode())
             self.socket.close()
 
-        except Exception:
+        except socket.error:
             pass
 
 
@@ -152,6 +157,10 @@ class UI:
         return userlist
 
     def send_message(self):
+        if self.client.status == STATUS.BUSY:
+            print("Your status is currently set to Busy. Change it to enable messaging.")
+            return
+        
         print("Getting a list of active users...")
         userlist = self.get_active_users()
 
@@ -280,6 +289,12 @@ class UI:
                 return password
             print("Invalid password! try again")
 
+    def change_status(self):
+        if self.client.status == STATUS.BUSY:
+            self.client.set_status(STATUS.AVAILABLE)
+        else:
+            self.client.set_status(STATUS.BUSY)
+
     def exit_ui(self):
         print(f"Goodbye, {self.username}!")
         exit(0)
@@ -329,7 +344,7 @@ class UI:
                     print("You didn't set a password, canceling...")
                     continue
 
-                self.client = Client(self.username, self.password, SERVER_TCP_ADDR)
+                self.client = Client(self.username, self.password, STATUS.AVAILABLE, SERVER_TCP_ADDR)
                 if self.client.connect():
                     print("You are connected to the server!")
                     try:
@@ -361,7 +376,8 @@ class UI:
                 ("*" if self.client.has_messages("log") or 
                 self.client.has_messages("message") else ""))
             print("[3]. Show history")
-            print("[4]. Exit chatroom\n")
+            print(f"[4]. Change Status (Currently {self.client.status})")
+            print("[5]. Exit chatroom\n")
 
             option = -1
             while True:
@@ -370,7 +386,7 @@ class UI:
                     print("Please enter a number")
                     continue
                 option = int(choice)
-                if option < 0 or option > 4:
+                if option < 0 or option > 5:
                     print("Please choose a number between 0 and 4")
                 else:
                     break
@@ -392,6 +408,9 @@ class UI:
 
             elif option == 3:
                 self.show_history()
+
+            elif option == 4:
+                self.change_status()
 
             else:
                 self.client.close()

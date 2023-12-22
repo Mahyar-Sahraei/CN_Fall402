@@ -157,6 +157,9 @@ class Server:
                 elif message == "gethistory":
                     client.socket.send(f"history:{json.dumps(client.history)}".encode())
 
+                elif (matches := re.match(r"setstatus:(Available|Busy)", message)) is not None:
+                    client.status = matches.groups()[0]
+
                 elif (matches := re.match(r"setname:(.+)", message)) is not None:
                     client.name = matches.groups()[0]
                     logging.info(f"{client.name} changed his/her name to: {client.name}.")
@@ -168,18 +171,20 @@ class Server:
 
                             if self.client_list[receiver_name] is not None:
                                 receiver_client = self.client_list[receiver_name]
-                                receiver_client.enqueue_message(sender_message, client.name)
-                                if receiver_client.history.get(client.name) is None:
-                                    receiver_client.history[client.name] = []
-                                receiver_client.history[client.name].append(sender_message)
-                                client.socket.send(f"log:Message sent to {receiver_name} successfully.".encode())
-                                logging.info(f"{client.name} sent a message to: {receiver_name}.")
+                                if receiver_client.status == STATUS.AVAILABLE:
+                                    receiver_client.enqueue_message(sender_message, client.name)
+                                    if receiver_client.history.get(client.name) is None:
+                                        receiver_client.history[client.name] = []
+                                    receiver_client.history[client.name].append(sender_message)
+                                    client.socket.send(f"log:Message sent to {receiver_name} successfully.".encode())
+                                    logging.info(f"{client.name} sent a message to: {receiver_name}.")
+                                else:
+                                    client.socket.send(f"log:Specified user ({receiver_name}) is busy right now.".encode())
 
                             else:
                                 client.socket.send(f"log:Specified user ({receiver_name}) doesn't exist.".encode())
 
             except socket.error:
-                self.client_list.pop(client.id)
                 client.shutdown()
                 logging.info(f"{client.get_name_id()} disconnected.")
                 break
