@@ -133,6 +133,7 @@ class UI:
     def __init__(self, server_udp_addr):
         self.client = None
         self.username = "[UNKNOWN]"
+        self.password = None
         
         self.udp_socket = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
         self.server_udp_addr = server_udp_addr
@@ -263,31 +264,21 @@ class UI:
                     print(f"\t{line}")
             print("-----\n")
 
-    def change_username(self):
+    def set_username(self):
         print("Please enter your name. The name should only contain alphabets, numbers, _, - or dot(.):")
         while True:
             name = input(">> ")
-            try:
-                if re.match(r"^([a-zA-Z0-9]|\-|\_|\.)+$", name):
-                    self.username = name
-                    print(f"Your name set to {self.username} successfully.")
-                    return
-                print("Invalid name! try again")
-            except KeyboardInterrupt:
-                return
+            if re.match(r"^([a-zA-Z0-9]|\-|\_|\.)+$", name):
+                return name
+            print("Invalid name! try again")
             
-    def change_password(self):
+    def set_password(self):
         print("Please enter your password. The password should contain 8 or more characters:")
         while True:
             password = input(">> ")
-            try:
-                if len(password) >= 8:
-                    self.password = password
-                    print(f"Password set successfully.")
-                    return
-                print("Invalid password! try again")
-            except KeyboardInterrupt:
-                return
+            if len(password) >= 8:
+                return password
+            print("Invalid password! try again")
 
     def exit_ui(self):
         print(f"Goodbye, {self.username}!")
@@ -295,8 +286,7 @@ class UI:
 
     def main_menu(self):
         print("Welcome to the chatroom!")
-        self.change_username()
-        self.change_password()
+        self.username = self.set_username()
         while True:
             print("\n\nMain Menu")
             print("------------")
@@ -330,6 +320,15 @@ class UI:
                         print(f"{i + 1}: {active_users[i]}")
 
             elif option == 1:
+                if self.username is None:
+                    print("You haven't set a username yet!")
+                    continue
+
+                self.password = self.set_password()
+                if self.password is None:
+                    print("You didn't set a password, canceling...")
+                    continue
+
                 self.client = Client(self.username, self.password, SERVER_TCP_ADDR)
                 if self.client.connect():
                     print("You are connected to the server!")
@@ -346,7 +345,7 @@ class UI:
                           "3. Your password is wrong")
 
             elif option == 2:
-                self.change_username()
+                self.username = self.set_username()
 
             else:
                 self.exit_ui()
