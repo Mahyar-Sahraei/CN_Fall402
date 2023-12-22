@@ -51,7 +51,7 @@ class Client:
         try:
             self.socket.connect(self.sever_addr)
             self.socket.send(f"setname:{self.name}".encode())
-        except Exception as e:
+        except socket.error:
             return False
         self.connected = True
 
@@ -109,7 +109,7 @@ class Client:
             self.socket.send("close".encode())
             self.socket.close()
 
-        except Exception:
+        except socket.error:
             pass
 
 
